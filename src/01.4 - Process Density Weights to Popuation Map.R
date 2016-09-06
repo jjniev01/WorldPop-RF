@@ -241,6 +241,11 @@ require(rjson)
 require(rgdal)
 require(raster)
 require(snow)
+require(RQGIS)
+
+
+##  Set the QGIS environment (can change to set_env() if unsure of location):
+my_env <- set_env("C:\\Program Files\\QGIS Essen")
 
 ##  Input projection is configured for each country based on the most
 ##  	appropriate output for distance/area considerations...
@@ -432,7 +437,7 @@ in_raster <- brick(in_path)
 ## Project the Raster and save it as a new Raster:
 if (is.na(file.info( landcover_path )[[2]]) | !skip_existing){
   ##  Project the raster into WGS84:
-   projectRaster(from = in_raster, , res = c(0.000833), crs = CRS("+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"),
+   projectRaster(from = in_raster, res = c(0.000833), crs = CRS("+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"),
                  method = "ngb", filename = landcover_path, format = "GTiff",
                  overwrite = geo_env$overwrite, options = c("COMPRESS=LZW"))  
    
@@ -572,7 +577,7 @@ print("PPP: Using census file - census.shp")
 ## Create the Raster containing zones to be used in zonal statistics:
 temp_ras <- Con(geo_env$snap_raster > 0, 1, 0)
 temp_ras[] <- NA
-
+##  JJN 2016-09-06:  Switching to qgis:zonalstatistics fuction so a zonal raster is no longer needed.
 gridz <- writeRaster(temp_ras, "C:/tmp/gridz.tif", format = "GTiff", datatype = "INT4U", overwrite = geo_env$overwrite, options=c("COMPRESS=LZW"))
 system(paste0("gdal_rasterize -l admin_Union -a ADMINID ", gsub("/", "\\\\", paste0(tmp_path,"admin_Union.shp")), " C:\\tmp\\gridz.tif"))
 #system(paste0("gdal_rasterize -l admin_Union -a ADMINID -a_nodata 65535 -init 65535 ", gsub("/", "\\\\", paste0(tmp_path,"admin_Union.shp")), " C:\\tmp\\gridz.tif"))
@@ -596,9 +601,26 @@ colnames(gridy) <- c("ADMINID", "SUM")
 admin_Union_sum <- merge(admin_Union, as.data.frame(gridy), by = "ADMINID")
 
 writeOGR(admin_Union_sum, dsn = paste0(tmp_path, "admin_Union_sum.shp"), layer = "admin_Union_sum", driver = "ESRI Shapefile", overwrite_layer = TRUE)
-admin_Union_sum <- readOGR(dsn = paste0(tmp_path, "admin_Union_sum.shp"), layer = "admin_Union_sum")
 
-system(paste0("gdal_rasterize -l admin_Union_sum -a SUM ", gsub("/", "\\\\", paste0(tmp_path,"admin_Union_sum.shp")), " C:\\tmp\\gridy.tif"))
+
+##  Set parameters to be passed to the qgis function:
+# print("Getting and Setting QGIS parameters...")
+# params <- get_args(alg = "qgis:zonalstatistics", qgis_env = my_env)
+# params$INPUT_RASTER <- popdensity_weighting_final
+# params$RASTER_BAND <- 1
+# params$INPUT_VECTOR <- paste0(tmp_path,"admin_Union.shp")
+# params$COLUMN_PREFIX <- "Q"
+# params$OUTPUT_LAYER <- paste0(tmp_path,"admin_Union_sum.shp")
+# admin_Union_sum <- readOGR(dsn = paste0(tmp_path, "admin_Union_sum.shp"), layer = "admin_Union_sum")
+# 
+# print("Calculating QGIS Zonal Statistics...")
+# ##  Carry out the zonal statistics:
+# run_qgis(alg = "qgis:zonalstatistics",
+#          params = params,
+#          qgis_env = my_env)
+
+##  Rasterize the results of the zonal statistics.
+system(paste0("gdal_rasterize -l admin_Union_sum -a Qsum ", gsub("/", "\\\\", paste0(tmp_path,"admin_Union_sum.shp")), " C:\\tmp\\gridy.tif"))
 gridy <- brick("C:/tmp/gridy.tif")
 
 ##  Put gridz as a brick to save on memory:
