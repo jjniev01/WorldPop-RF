@@ -199,14 +199,14 @@ GR_rur <- GR_calculator(iso = country,
 
 ##	Set UNADJUST to True if we want to produce a map adjusted to UN totals
 ##		for each target year, False otherwise:
-UNADJUST <- c( TRUE, TRUE, TRUE)
+UNADJUST <- c( TRUE, TRUE)
 
 
 ## If UNADJUST == True then we need to provide the UN total population for
 ##		that year - needed if you want to adjust map for U.N. esimates.
 ##		U.N. estimates are from the World Urbanization Prospects
 ##		(http://esa.un.org/unpd/wup/index.htm)
-##  RWA
+##  RWA Example
 UNPOP <- popRetriever(iso = country,
                       target_years = GR_years)
 
@@ -363,35 +363,35 @@ setwd(ensure_dir(tmp_path))
 ##  BEGIN:  CREATION OF PREDICTED POPULATION USING THE UGM
 ##
 ##  If the option to utilize the UGM is true:
-if(use_uGM){
+if(use_ugm){
   print("Beginning calculation of predicted population using the Urban Growth Model")
   
   ##  Load the probability raster output from 1.3.Opt1:
   prob <- brick(paste0(root_path,"output/",country, "/ugm_prediction.tif"))
   
   ##  Load the redistributed population density raster just produced for 2010:
-  
+  popras <- brick(paste0(root_path,"output/",country,"/",country,"_ppp_",rf_version,"_2010.tif"))
   
   ##  Load the corresponding UGM land cover raster (or the urban land cover raster)
   ##    as well:
-  landcover_ugm <- brick()
+  landcover_ugm <- brick(paste0(root_path,"data/",country,"/Landcover/landcover_clsBLT.tif"))
   
   ##  Get the total URBAN population of the 2010 raster (e.g. the sum of pop 
   ##  where the landcover is urban/built):
-  pop2010 <- 
+  pop2010 <- sum(popras[which(values(landcover_ugm) == 190 | values(landcover_ugm) == 240)], na.rm = TRUE)
     
-    ##  Calculate the estimated 2020 URBAN population:
-    pop_2020 <- pop2010 * (exp( (GR_urb[2]/100) )) * (exp( (GR_urb[3]/100) ))
+  ##  Calculate the estimated 2020 URBAN population:
+  pop_2020 <- pop2010 * (exp( (GR_urb[2]/100) )) * (exp( (GR_urb[3]/100) ))
   
   ##  Get the average URBAN population density for 2010 from the pop. den. raster where 
   ##    it is spatially coincident with land cover matching urban:
-  urb_dens_10 <-
+  urb_dens_10 <- pop_2010/(length(which(values(landcover_ugm) == 190 | values(landcover_ugm) == 240)))
     
-    ##  Use that average urban pop. dens. for 2010 and the total pop for 2010 to
-    ##  calculate the population density threshold to be used in determining new 
-    ##  urban growth from 2010 to 2015:
-    ##  Calculate the urban pop. dens. in 2020:
-    urb_dens_20 <- urb_dens_10 - (urb_dens_10 * densdr * n_years)
+  ##  Use that average urban pop. dens. for 2010 and the total pop for 2010 to
+  ##  calculate the population density threshold to be used in determining new 
+  ##  urban growth from 2010 to 2015:
+  ##  Calculate the urban pop. dens. in 2020:
+  urb_dens_20 <- urb_dens_10 - (urb_dens_10 * densdr * n_years)
   
   ##  Calculate the estimated urban pop.area in 2020 (i.e. # of pixels):
   urb_pop_20 <- pop_2020/urb_dens_20
@@ -426,7 +426,7 @@ if(use_uGM){
   landcover_ugm_15 <-
     
     ##  Write the raster to the output as the 2015 predicted urban extents:
-    
+  writeRaster()  
     
     ##  Apply urban and rural growth rates for 5 years of change to the 2010 pop.
     ##  dens. raster respective to the landcover_ugm for 2015:
