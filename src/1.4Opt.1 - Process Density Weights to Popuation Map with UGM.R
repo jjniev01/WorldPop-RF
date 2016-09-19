@@ -26,6 +26,127 @@
 #####
 
 
+#####
+##  BEGIN FUNCTION DEFINITIONS
+require(dplyr)
+require(plyr)
+
+##	Create a directory function to check for and create data directories if they don't exist:
+ensure_dir <- function( d ){
+  if ( !file.info( d )[[2]] ){
+    file.create( d )
+  } 
+  return( d )
+}
+
+
+##  Assume GR_years has already been defined
+##  Define the function that will calculate the GR for urb and rur:
+GR_calculator <- function(dat = grdf,
+                          iso = NULL, 
+                          target_years = c(), 
+                          urb = FALSE, orig_year = NULL){
+  ##  Subset the data to the country in question:
+  dat <- dat %>% filter(ISO == iso)
+  
+  ##  Determine if we are calculating for urban GRs:
+  if(urb == FALSE){
+    type <- "RUR"
+  }else{type <- "URB"}
+  
+  ##  From the data frame, get all the urban or rural AGRs to be used 
+  ##  in calculations:
+  ##    Create two offset index sequencers to put together the growth
+  ##      rates to be extracted:
+  ##    Upper year set:
+  uyset <- c(1995,2000,2005,2010,2015,2020,2025,2030)
+  ##    Lower year set:
+  lyset <- c(1990,1995,2000,2005,2010,2015,2020,2025)
+  
+  ##  Create a vector of the columns to retrive the type specific 
+  ##    growth rate values from:
+  grcols <- paste0(lyset,"_",uyset,".",type,"AGR")
+  
+  ##  Retrieve the growth rate values as a vector:
+  agr <- unlist(dat[,grcols], use.names = FALSE)
+  
+  ##  Divide those values by 100 to put them in decimal percent:
+  agr <- agr/100
+  
+  ##  Create an empty vector to store the growth rates calculated 
+  ##  which will be returned at the end of the function:
+  gr_vec <-c()
+  
+  ##  For every year in the target years:
+  for(ty in target_years){
+    ##  Get nyears to apply AGRs for all time steps:
+    ##    Get the magnitude year difference based upon whether or not
+    ##    census year is less than the target year:
+    ##      If census year < target year, then cyty <- TRUE
+    if(orig_year < ty){
+      cyty <- TRUE
+    }else{cyty <- FALSE}
+    
+    ##      Calculate a vector of magnitude of all the year differences
+    if(cyty){
+      nyears <- abs(c(1995,2000,2005,2010,2015,2020,2025,2030) - orig_year)
+    }else{
+      nyears <- abs(orig_year - c(1990,1995,2000,2005,2010,2015,2020,2025))
+    }
+    ##      Number of years is the minimum of the following:
+    nyears <- pmin(5, nyears)
+    
+    ##  Determine for each time step if the rate will be applied 
+    ##  "forward" or "backward":
+    ##    First logic gate: 
+    gate1 <- ((ty < orig_year) & (ty < uyset) & (orig_year > lyset))
+    ##    Second logic gate:
+    gate2 <- ((ty > orig_year) & (ty > lyset) & (orig_year < uyset))
+    ##  Determine forward (1) backward(-1) or none(0):
+    fbn <- c()
+    for(g in 1:length(gate1)){
+      if(gate1[g]){
+        fbn <-c(fbn,-1)
+      }else{
+        ifelse(gate2[g], fbn <- c(fbn, 1),fbn <- c(fbn,0))
+      }
+    }
+    
+    ##  Calculate the GR:
+    gr <- prod(exp(agr * nyears) ** fbn)
+    ##  Add the new GR to the list of GRs:
+    gr_vec <- c(gr_vec, gr)  
+  }
+  ##  Return the GR vector:
+  return(gr_vec)
+}
+
+
+##  Create a function to get the population values for the UN Adjust 
+##    for all target years:
+popRetriever <- function(dat = grdf,iso = NULL, target_years = c()){
+  ##  Create an empty vector to store the population values to 
+  ##    be returned:
+  pops <- c()
+  
+  ##  Subset the data based upon the country name:
+  dat <- dat %>% filter(ISO == iso)
+  
+  ##  For every year in target_years:
+  for(y in target_years){
+    ##  Define the pop-year column to retrieve from:
+    f <- paste0("POP_",y)
+    
+    ##  Retrieve the value for that year and the country and store it:
+    pops <-c(pops, dat[,f])
+  }
+  ##  Return the population values multiplied by 1000
+  pops <- pops *1000
+  return(pops)
+}
+
+##  END:  FUNCTION DEFINITIONS
+#####
 
 #####
 ##	BEGIN:	Set per-country configuration options
@@ -58,6 +179,10 @@ densdr <- 0.01
 ##           difference
 n_years <- 10
 
+##  Define the original census data year:
+censusdat_year <- 2000
+
+
 ##	TODO: Eventually this can be set in the Metadata.r file and pulled
 ##		via JSON but for now we will set it here, you must make
 ##		sure it matches the versioning in the Metadata.r file:
@@ -70,23 +195,35 @@ n_years <- 10
 ##			census_folder option below), it must be the rate from the more
 ##			recent census data to	2010 (i.e. from 2009 to 2010 for Vietnam) -
 ##			so calculation, for	VNM, is for one year:
-##  These are for Uganda (input census data is for 2002):
+##  These are for Uganda (input census data is for 2002 and stored as 
+##  variable censusdat_year in 1.4.R):
 GR_years <- c(2010, 2015, 2020)
-GR_urb <- c(1.784610171, 1.379195006, 1.322468413)
-GR_rur <- c(1.124849442, 1.073565841, 1.061019831)
 
-# GR_years <- c(2010, 2015, 2020)
-# GR_urb <- c(0.9690879, 5.43, 5.3)
-# GR_rur <- c(0.9927266, 2.95, 2.76)
-#GR_years <- C(2000)
-#GR_urb <- c(0.861741446)
-#GR_rur <- c(0.97488919]67345071)
+##	Country specific population-specific variables:
+##		Growth rates are estimated for urban and rural areas for the years
+##		included in GR_years. (file: growth_rates.xlsx)
+##
+##	!!!CAUTION!!!: if we use more recent census data (see the
+##			census_folder option below), it must be the rate from the more
+##			recent census data to	2010 (i.e. from 2009 to 2010 for Vietnam) -
+##			so calculation, for	VNM, is for one year:
+##  NOTE:  The parameters for the below functions should not be changed 
+##         within the function call; change the input vectors that are 
+##         declared for the parameters instead.
+GR_urb <- GR_calculator(iso = country, 
+                        target_years = GR_years,
+                        urb = TRUE,
+                        orig_year = censusdat_year)
+GR_rur <- GR_calculator(iso = country, 
+                        target_years = GR_years,
+                        urb = FALSE,
+                        orig_year = censusdat_year)
 
 ##	Processing flags:
 ##	Set UNADJUST to True if we want to produce a map adjusted to UN totals
 ##		for 2010, False otherwise:
-UNADJUST <- c(TRUE, TRUE, TRUE)
-#UNADJUST <- c(TRUE)
+UNADJUST <- c(FALSE, FALSE, FALSE)
+
 
 ## If UNADJUST == True then we need to provide the UN total population for
 ##		that year - needed if you want to adjust map for U.N. esimates.
@@ -94,7 +231,7 @@ UNADJUST <- c(TRUE, TRUE, TRUE)
 ##		(http://esa.un.org/unpd/wup/index.htm)
 ##  These are for Uganda (input census data is for 2002):
 UNPOP <- c(10837000, 12482000, 14123000)
-#UNPOP <- c(8396000)
+
 
 ##	Should we skip processing and creation for any existing data sets:
 skip_existing <- FALSE
@@ -148,19 +285,6 @@ beginCluster( nodes )
 ##	END: Import packages and set GeoProcessing environment
 #####
 
-#####
-##	BEGIN: Define utility functions ##
-
-##	Create a directory function to check for and create data directories if they don't exist:
-ensure_dir <- function( d ){
-  if ( !file.info( d )[[2]] ){
-    file.create( d )
-  } 
-  return( d )
-}
-
-##	END: Define utility functions
-#####
 
 #####
 ##	BEGIN: Data pre-processing for needed datasets
@@ -173,9 +297,10 @@ dataset_folders <- list.files(path = data_path, full.names = FALSE)
 ##    population maps for 2010 (both ppp and pph, UN and non-UN adjusted) (i.e.
 ##    there will be 4 maps total brought in 2010 ppp, 2010 UN ppp, 2010 pph, and
 ##    2010 UN pph):
-dataset_paths <- Sys.glob( paste0( output_path, country, "_pp*2010*.tif" ))
-if(dataset_paths == ""){
-  print("ERROR:  No \"population map\" TIFs | IMGs found in the output folder!  You first need to run the 1.3 R script!")
+dataset_paths <- paste0( output_path, country, "_ppp_v2c",censusdat_year,".tif" )
+
+if( !file.exists(dataset_paths) ){
+  print("ERROR:  No \"population map\" TIFs | IMGs found in the output folder!  You first need to run the 1.4 R script!")
   stop()
 }
 
@@ -192,7 +317,7 @@ setwd(ensure_dir(output_path))
 ##  BEGIN:  CREATION OF PREDICTED POPULATION USING THE UGM
 ##
 ##  If the option to utilize the UGM is true:
-if(use_uGM){
+if(use_UGM){
   print("Beginning calculation of predicted population using the Urban Growth Model")
   ##  NOTE: The probability raster output from 1.3.Opt1, i.e. prob, is utilized 
   ##  here under the same variable name. Therefore, 1.3.Opt.1 MUST BE RUN prior 
@@ -205,19 +330,8 @@ if(use_uGM){
     
     ##  Load the corresponding UGM land cover raster (or the urban land cover raster)
     ##  as well:
+####TODO:  Explicitly define LC2 since I will not be running 1.4 fully prior to this
     landcover_ugm <- LC2
-    
-    ##  See if the given map is projected (i.e. pph) or not:
-    prj_map <- grepl(".*pph.*", pmap)
-    
-    ##  See if the given map is supposed to be UN adjusted:
-    un_adj <- grepl(".*UNadj.*", pmap)
-    
-    ##  If the pop map is projected:
-    if (prj_map){
-      ##  Project the landcover raster to match:
-      landcover_ugm <- projectRaster(landcover_ugm, popmap)
-    }
     
     ##  Get the total URBAN population of the 2010 raster (e.g. the sum of pop 
     ##  where the landcover is urban/built):
@@ -299,76 +413,12 @@ if(use_uGM){
     popmap_20[which(values(landcover_ugm_20)==1)] <- popmap_20[which(values(landcover_ugm_20)==1)] * GR_urb[3]
     popmap_20[which(values(landcover_ugm_20)!=1)] <- popmap_20[which(values(landcover_ugm_20)!=1)] * GR_rur[3]
     
-    ##  If the map is supposed to be UN adjusted:
-    if (un_adj){
-      ##  If the map is projected:
-      if(prj_map){
-        ##  Bring in the PPHa grid sum:
-        grid_PPHaSum <- brick("C:/tmp/grid_PPHaSum.tif")
-        
-        ##  Calculate the constant:
-        const <- grid_PPHaSum * 0 + UNPOP[3]
-        
-        ## Kludge: Fix the popmap_year extents
-        popmap_20 <- crop(popmap_20, extent(landcover_ugm_20))
-        const <- crop(const, extent(landcover_ugm_20))
-        grid_PPHaSum <- crop(grid_PPHaSum, extent(landcover_ugm_20))
-        
-        for (var_name in c("popmap_20","const", "grid_PPHaSum")){
-          print(paste("Fixing Extent: ", var_name, sep=""))
-          eval(parse(text=paste("extent(", var_name, ") <- extent(landcover_ugm_20)", sep="")))
-          flush.console()
-        }
-              
-        if (round_counts){
-          popmap_20_adj <- (popmap_20 * (const / grid_PPHaSum)) + 0.5         
-        } else {
-          popmap_20_adj <- popmap_20 * (const / grid_PPHaSum)
-        }
-      } else{
-      ##  Bring in the grid PPPSum
-      grid_PPPsum <- brick("C:/tmp/grid_PPPSum.tif")
-      
-      ##  Calculate the constant:
-      const <- grid_PPPSum * 0 + UNPOP[3]
-      
-      ##  Adjust the population raster to the UN adjusted values:
-      ##  Correct the extents of grid_PPPSum and const:
-      ## Crop the popmap_year and gridz extents:
-      grid_PPPSum <- crop(grid_PPPSum, extent(landcover_ugm_20))
-      const <- crop(const, extent(landcover_ugm_20))
-      
-      ##  FRS: I added this as I believe this is a bug with the raster package.  This
-      ##    shouldn't need to be run, and it will *not* fix problems in differing
-      ##    rows and columns, if there's ever a problem where the crop() fails to
-      ##    produce rasters of identical sizes (e.g. when there are very small diff.
-      ##    in cell size for example).  This is a stop-gap hack and hopefully could
-      ##    be removed if raster package works correctly in the future:
-      for (var_name in c("grid_PPPSum", "const")) {
-        print(paste("Fixing Extent: ", var_name, sep=""))
-        eval(parse(text=paste("extent(", var_name, ") <- extent(landcover_ugm_20)", sep="")))
-        flush.console()
-      }
-      
-      if (round_counts){        
-        popmap_20_adj <- (popmap_20 * (const / grid_PPPSum)) + 0.5 
-      } else {
-        popmap_20_adj <- popmap_20 * (const / grid_PPPSum)
-      }
-      
-      }
-      ##  Write this resulting raster to the output to obtain our 2020 predicted 
-      ##  population density map:
-      writeRaster(popmap_20_adj, filename = paste0(outpath, country, if(prj_map){"_pph_v"}else{"_ppp_v"}, rf_version, "_2020_UNadj.tif"),
-                  method = "GTiff", overwrite = TRUE, datatype = "INT2U", 
-                  NAflag = 65535, options = c("COMPRESS=LZW"))
-       
-    } else{
-      ##  Write the non-UN adjusted popualtion map:
-      writeRaster(popmap_20, filename = paste0(outpath, country, if(prj_map){"_pph_v"}else{"_ppp_v"}, rf_version, "_2020.tif")filename = paste0(outpath, country, if(prj_map){"_pph_v"}else{"_ppp_v"}, rf_version, "_2020_UNadj.tif"),
-                  method = "GTiff", overwrite = TRUE, datatype = "INT2U", 
-                  NAflag = 65535, options = c("COMPRESS=LZW"))
-    }
+    
+    ##  Write the non-UN adjusted popualtion map:
+    writeRaster(popmap_20, filename = paste0(outpath, country, if(prj_map){"_pph_v"}else{"_ppp_v"}, rf_version, "_2020.tif"),filename = paste0(outpath, country, if(prj_map){"_pph_v"}else{"_ppp_v"}, rf_version, "_2020_UNadj.tif"),
+                method = "GTiff", overwrite = TRUE, datatype = "INT2U", 
+                NAflag = 65535, options = c("COMPRESS=LZW"))
+    
   } 
   ##  END:  CREATION OF PREDICTED POPULATION USING THE UGM
   ######
