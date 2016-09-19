@@ -14,7 +14,7 @@
 
 ##	Parse main configuration file, which will set the country and root_path
 ##		variables:
-source("01.0 - Configuration.py.r")
+source(paste0(root_path,"/src/01.0 - Configuration.py.R"))
 
 
 ##	Load the metadata from the file created in the country's /data folder:
@@ -28,8 +28,8 @@ source(paste(project_path, "Metadata.r", sep=""))
 ##		they don't already exist, however, make sure that the containing
 ##		folder, by default C:/tmp/, does already exist as this can cause 
 ##		problems because directory creation is non-recursive:
-modis_archive_path <- "C:/tmp/MODIS_ARC/"
-modis_out_path <- "C:/tmp/MODIS_ARC/PROCESSED/"
+modis_archive_path <- "D:/tmp/MODIS_ARC/"
+modis_out_path <- "D:/tmp/MODIS_ARC/PROCESSED/"
 
 
 ##	It's good practice to check the folders in your country's data folder
@@ -261,7 +261,7 @@ for (dataset in metadata) {
 
 	derived_sets <- substr( dataset$derived, 1, 3)
 
-	for (derived in dataset$derived[ derived_sets %in% c("cls", "dst", "prp", "", "slo") ]) {
+	for (derived in dataset$derived[ derived_sets %in% c("cls", "dst","dte", "prp", "", "slo") ]) {
 		var_name <- substr( tolower(dataset$dataset_folder), 1, 3)
 		dataset_name <- tolower(dataset$dataset_folder)
 		
@@ -291,6 +291,11 @@ for (dataset in metadata) {
 				var_name <- paste( var_name, "_", derived, sep="")
 				dataset_description = paste("Distance to feature or value of", tolower(dataset$dataset_folder))
 				dataset_summary = "mean"
+			},
+			dte = {
+			  var_name <- paste( var_name, "_", derived, sep="")
+			  dataset_description = paste("Distance to Edge of feature or value of", tolower(dataset$dataset_folder))
+			  dataset_summary = "mean"
 			},
 			prp = {
 				var_name <- paste( var_name, "_", derived, sep="")
