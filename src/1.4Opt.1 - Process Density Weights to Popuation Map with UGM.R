@@ -155,6 +155,15 @@ popRetriever <- function(dat = grdf,iso = NULL, target_years = c()){
 ##		variables:
 source("01.0 - Configuration.py.r")
 
+##  Vector of model modes:
+##  NOTES
+##    "1g" refers to one timestep geometric increase
+##    "2g" refers to two timesteps geometric increase
+##    "10g" refers to ten timesteps geometric increase
+##    "urbforRF" refers to only creating the new UGM-predicted
+##      urban landcover for reentry into an RF model with 
+##      the predicted population data
+modmode <- c("1g", "2g","10g","urbforRF")
 
 ##	Round to whole population counts?
 round_counts <- FALSE
@@ -210,14 +219,14 @@ GR_years <- c(2010, 2015, 2020)
 ##  NOTE:  The parameters for the below functions should not be changed 
 ##         within the function call; change the input vectors that are 
 ##         declared for the parameters instead.
-GR_urb <- GR_calculator(iso = country, 
-                        target_years = GR_years,
-                        urb = TRUE,
-                        orig_year = censusdat_year)
-GR_rur <- GR_calculator(iso = country, 
-                        target_years = GR_years,
-                        urb = FALSE,
-                        orig_year = censusdat_year)
+# GR_urb <- GR_calculator(iso = country, 
+#                         target_years = GR_years,
+#                         urb = TRUE,
+#                         orig_year = censusdat_year)
+# GR_rur <- GR_calculator(iso = country, 
+#                         target_years = GR_years,
+#                         urb = FALSE,
+#                         orig_year = censusdat_year)
 
 ##	Processing flags:
 ##	Set UNADJUST to True if we want to produce a map adjusted to UN totals
@@ -287,11 +296,7 @@ beginCluster( nodes )
 
 
 #####
-##	BEGIN: Data pre-processing for needed datasets
-
-##	Get a character vector of all existing folders in the country's data folder:
-dataset_folders <- list.files(path = data_path, full.names = FALSE)
-
+##	BEGIN: DATA PATH RETRIEVAL
 ##	Datasets:
 ##	  Population redistribution maps produced from 1.4, specifically the 
 ##    population maps for 2010 (both ppp and pph, UN and non-UN adjusted) (i.e.
@@ -308,123 +313,319 @@ if( !file.exists(dataset_paths) ){
 ##  folder:
 setwd(ensure_dir(output_path))
 
-##	END: Data pre-processing for needed datasets
+##	END: DATA PATH RETRIEVAL
 #####
-
 
 
 ######
 ##  BEGIN:  CREATION OF PREDICTED POPULATION USING THE UGM
 ##
-##  If the option to utilize the UGM is true:
-if(use_UGM){
-  print("Beginning calculation of predicted population using the Urban Growth Model")
-  ##  NOTE: The probability raster output from 1.3.Opt1, i.e. prob, is utilized 
-  ##  here under the same variable name. Therefore, 1.3.Opt.1 MUST BE RUN prior 
-  ##  while still in the same R session:
- 
-  ##  For each population map:
-  for(pmap in dataset_paths){
-    ##  Bring in the population map:
-    popmap <- brick(pmap)
+for( m in modmode ){
+  start <- proc.time()
+  ##  If runing one timestep:
+  if(m == "1g"){
+    print("Beginning UGM Population prediction: One Timestep")
+    ##  NOTE: The probability raster output from 1.3.Opt1, i.e. prob, is utilized 
+    ##  here under the same variable name. Therefore, 1.3.Opt.1 MUST BE RUN prior 
+    ##  while still in the same R session:
     
-    ##  Load the corresponding UGM land cover raster (or the urban land cover raster)
-    ##  as well:
-####TODO:  Explicitly define LC2 since I will not be running 1.4 fully prior to this
-    landcover_ugm <- LC2
-    
-    ##  Get the total URBAN population of the 2010 raster (e.g. the sum of pop 
-    ##  where the landcover is urban/built):
-    pop2010 <- sum(popmap[which( values(landcover_ugm) == 1 )])
-    
-    ##  Calculate the estimated 2020 URBAN population:
-    pop_2020 <- pop2010 * (exp( (GR_urb[2]/100) )) * (exp( (GR_urb[3]/100) ))
-    
-    ##  Get the average URBAN population density for 2010 from the pop. den. raster where 
-    ##    it is spatially coincident with land cover matching urban:
-    urb_dens_10 <- mean(pop2010[which( values(landcover_ugm) == 1 )])
-    
-    ##  Use that average urban pop. dens. for 2010 and the total pop for 2010 to
-    ##  calculate the population density threshold to be used in determining new 
-    ##  urban growth from 2010 to 2015:
-    ##  Calculate the urban pop. dens. in 2020:
-    urb_dens_20 <- urb_dens_10 - (urb_dens_10 * densdr * n_years)
-    
-    ##  Calculate the estimated urban pop.area in 2020 (i.e. # of pixels):
-    urb_pop_20 <- pop_2020/urb_dens_20
-    
-    ##  Calculate the area (i.e. number of pixels) that will have new urban 
-    ##  growth:
-    urb_grow_area <- urb_pop_20 - length( which( values( landcover_ugm ) == 1 ) )
-    
-    ##  Give the treshold value of probability where cells are converted to 
-    ##  urban:
-    threshold.value <- sort(prob[], TRUE)[urb_grow_area + 1]
-    
-    ##  NOTE: We are assuming that half of the predicted growth occurs between 
-    ##        2010 to 2015 and the 2nd half of the predicted growth occurs 
-    ##        between 2015 and 2020. Therefore we are taking half the cells with 
-    ##        the highest probability and converting them before applying pop 
-    ##        growth rates and then doing the same for the second half to arrive 
-    ##        at 2020 predictions.
-    
-    ##  Select all cells that are above that threshold:
-    ##  NOTE:  This will be our 2020 landcover.
-    new_growth10_20 <- which( values( prob ) > threshold.value )
-    landcover_ugm_20 <- landcover_ugm
-    landcover_ugm_20[new_growth10_20] <- 1
-    
-    ##  Create the landcover containing the urban growth "seen" between 2010 and
-    ##  2015:
-    ##  Select the median value of all the probabilities above the threshold:
-    med_thresh <- median(values(prob) > threshold.value)
-    new_growth10_15 <- which(values(prob) > med_thresh) 
-    landcover_ugm_15 <- landcover_ugm
-    landcover_ugm_15[new_growth10_15] <- 1
-    
-    
-    ##  Write the 2015 and 2020 landcovers with the urban extents to the output 
-    ##  folder: 
-    writeRaster(landcover_ugm_15, 
-                filename = paste0(tmp_path, country,"_lc_2015", if(prj_map){"_prj"},".tif"),
-                method = "GTiff", overwrite = TRUE, datatype = "INT2U", 
-                NAflag = 65535, options = c("COMPRESS=LZW"))
-    
-    writeRaster(landcover_ugm_20, 
-                filename = paste0(tmp_path, country,"_lc_2020", if(prj_map){"_prj"},".tif"),
-                method = "GTiff", overwrite = TRUE, datatype = "INT2U", 
-                NAflag = 65535, options = c("COMPRESS=LZW"))
-    
-    ##  Apply urban and rural growth rates for 5 years of change to the 2010 pop.
-    ##  dens. raster respective to the landcover_ugm for 2015:
-    popmap_15 <- popmap
-    popmap_15[which(values(landcover_ugm_15)==1)] <- popmap_15[which(values(landcover_ugm_15)==1)] * GR_urb[2]
-    popmap_15[which(values(landcover_ugm_15)!=1)] <- popmap_15[which(values(landcover_ugm_15)!=1)] * GR_rur[2]
+    ##  For each population map:
+    for(pmap in dataset_paths){
+      ##  Determine the proper growth rates:
+      GR_urb <- GR_calculator(iso = country, 
+                              target_years = c((censusdat_year+10)),
+                              urb = TRUE,
+                              orig_year = censusdat_year)
       
-    ##  Write that raster to the TMP folder:
-    write.raster(popmap_15, filename = paste0(tmp_path, country, if(un_adj){"_pph_v"}else{"_ppp_v"}, rf_version, "_2015_ugm.tif"),
-                 method = "GTiff", overwrite = TRUE, datatype = "INT2U", 
-                 NAflag = 65535, options = c("COMPRESS=LZW"))
+      GR_rur <- GR_calculator(iso = country, 
+                              target_years = c((censusdat_year+10)),
+                              urb = FALSE,
+                              orig_year = censusdat_year)
+      
+      ##  Bring in the population map:
+      popmap <- brick(pmap)
+      
+      ##  Load the corresponding UGM land cover raster (or the urban land cover raster)
+      ##  as well:
+      landcover_ugm <- raster(Sys.glob(paste0(root_path,"data/", country,"/Urban/*.tif")))
+      
+      ##  Get the total URBAN population of the time t raster (e.g. the sum of pop 
+      ##  where the landcover is urban/built):
+      pop_t <- sum(popmap[which( values(landcover_ugm) == 1 )])
+      
+      ##  Calculate the estimated t+10 URBAN population:
+      pop_t10 <- pop_t * (exp( (GR_urb[1]/100) ))
+      
+      ##  Get the average URBAN population density for time t from the pop. den. raster where 
+      ##    it is spatially coincident with land cover matching urban:
+      urb_dens_t <- mean(popt[which( values(landcover_ugm) == 1 )])
+      
+      ##  Use that average urban pop. dens. for time t and the total pop for t+10 to
+      ##  calculate the population density threshold to be used in determining new 
+      ##  urban growth from time t to t+10:
+      ##  Calculate the urban pop. dens. in t+10:
+      urb_dens_t10 <- urb_dens_t - (urb_dens_t * densdr * n_years)
+      
+      ##  Calculate the estimated urban pop.area in 2020 (i.e. # of pixels):
+      urb_pop_t10 <- pop_t10/urb_dens_t10
+      
+      ##  Calculate the area (i.e. number of pixels) that will have new urban 
+      ##  growth:
+      urb_grow_area <- urb_pop_t10 - length( which( values( landcover_ugm ) == 1 ) )
+      
+      ##  Give the treshold value of probability where cells are converted to 
+      ##  urban:
+      threshold.value <- sort(prob[], TRUE)[urb_grow_area + 1]
+      
+      ##  Select all cells that are above that threshold:
+      ##  NOTE:  This will be our t+10 landcover.
+      new_growth_t10 <- which( values( prob ) > threshold.value )
+      landcover_ugm_t10 <- landcover_ugm
+      landcover_ugm_t10[new_growth_t10] <- 1
+      
+      ##  Save the 2020 UGM landcover in a separate file for use in the direct UGM RF integration:
+      tmp_path <- ensure_dir(paste0(output_path,"1g/tmp/"))
+      writeRaster(landcover_ugm_t10, 
+                  filename = paste0(tmp_path, country,"_lc_",(censusdat_year+10),".tif"),
+                  method = "GTiff", overwrite = TRUE, datatype = "INT2U", 
+                  NAflag = 65535, options = c("COMPRESS=LZW"))
+      
+      ##  Apply urban and rural growth rates for 10 years of change to the previously
+      ##  calculated time t estimated population density:
+      popmap_t10 <- popmap
+      popmap_t10[which(values(landcover_ugm_t10)==1)] <- popmap_t10[which(values(landcover_ugm_t10)==1)] * GR_urb[1]
+      popmap_t10[which(values(landcover_ugm_t10)!=1)] <- popmap_t10[which(values(landcover_ugm_t10)!=1)] * GR_rur[1]
+      
+      
+      ##  Write the non-UN adjusted popualtion map:
+      writeRaster(popmap_t10, filename = paste0(outpath, country, "_ppp_v", rf_version, "_",(censusdat_year+10),".tif"),
+                  method = "GTiff", overwrite = TRUE, datatype = "INT2U", 
+                  NAflag = 65535, options = c("COMPRESS=LZW"))
+      
+    } 
+    ##  END:  CREATION OF PREDICTED POPULATION USING THE UGM
+    ######
+  }
+  ##  Or if running the two timestep:
+  elif( m == "2g" ){
+    print("Beginning UGM Population prediction: Two Timesteps")
+    ##  NOTE: The probability raster output from 1.3.Opt1, i.e. prob, is utilized 
+    ##  here under the same variable name. Therefore, 1.3.Opt.1 MUST BE RUN prior 
+    ##  while still in the same R session:
     
+    ##  For each population map:
+    for(pmap in dataset_paths){
+      ##  Bring in the population map:
+      popmap <- brick(pmap)
+      
+      ##  Load the corresponding UGM land cover raster (or the urban land cover raster)
+      ##  as well:
+      ####TODO:  Explicitly define LC2 since I will not be running 1.4 fully prior to this
+      landcover_ugm <- LC2
+      
+      ##  Get the total URBAN population of the 2010 raster (e.g. the sum of pop 
+      ##  where the landcover is urban/built):
+      pop2010 <- sum(popmap[which( values(landcover_ugm) == 1 )])
+      
+      ##  Calculate the estimated 2020 URBAN population:
+      pop_2020 <- pop2010 * (exp( (GR_urb[2]/100) )) * (exp( (GR_urb[3]/100) ))
+      
+      ##  Get the average URBAN population density for 2010 from the pop. den. raster where 
+      ##    it is spatially coincident with land cover matching urban:
+      urb_dens_10 <- mean(pop2010[which( values(landcover_ugm) == 1 )])
+      
+      ##  Use that average urban pop. dens. for 2010 and the total pop for 2010 to
+      ##  calculate the population density threshold to be used in determining new 
+      ##  urban growth from 2010 to 2015:
+      ##  Calculate the urban pop. dens. in 2020:
+      urb_dens_20 <- urb_dens_10 - (urb_dens_10 * densdr * n_years)
+      
+      ##  Calculate the estimated urban pop.area in 2020 (i.e. # of pixels):
+      urb_pop_20 <- pop_2020/urb_dens_20
+      
+      ##  Calculate the area (i.e. number of pixels) that will have new urban 
+      ##  growth:
+      urb_grow_area <- urb_pop_20 - length( which( values( landcover_ugm ) == 1 ) )
+      
+      ##  Give the treshold value of probability where cells are converted to 
+      ##  urban:
+      threshold.value <- sort(prob[], TRUE)[urb_grow_area + 1]
+      
+      ##  NOTE: We are assuming that half of the predicted growth occurs between 
+      ##        2010 to 2015 and the 2nd half of the predicted growth occurs 
+      ##        between 2015 and 2020. Therefore we are taking half the cells with 
+      ##        the highest probability and converting them before applying pop 
+      ##        growth rates and then doing the same for the second half to arrive 
+      ##        at 2020 predictions.
+      
+      ##  Select all cells that are above that threshold:
+      ##  NOTE:  This will be our 2020 landcover.
+      new_growth10_20 <- which( values( prob ) > threshold.value )
+      landcover_ugm_20 <- landcover_ugm
+      landcover_ugm_20[new_growth10_20] <- 1
+      
+      ##  Create the landcover containing the urban growth "seen" between 2010 and
+      ##  2015:
+      ##  Select the median value of all the probabilities above the threshold:
+      med_thresh <- median(values(prob) > threshold.value)
+      new_growth10_15 <- which(values(prob) > med_thresh) 
+      landcover_ugm_15 <- landcover_ugm
+      landcover_ugm_15[new_growth10_15] <- 1
+      
+      
+      ##  Write the 2015 and 2020 landcovers with the urban extents to the output 
+      ##  folder: 
+      writeRaster(landcover_ugm_15, 
+                  filename = paste0(tmp_path, country,"_lc_2015", if(prj_map){"_prj"},".tif"),
+                  method = "GTiff", overwrite = TRUE, datatype = "INT2U", 
+                  NAflag = 65535, options = c("COMPRESS=LZW"))
+      
+      writeRaster(landcover_ugm_20, 
+                  filename = paste0(tmp_path, country,"_lc_2020", if(prj_map){"_prj"},".tif"),
+                  method = "GTiff", overwrite = TRUE, datatype = "INT2U", 
+                  NAflag = 65535, options = c("COMPRESS=LZW"))
+      
+      ##  Apply urban and rural growth rates for 5 years of change to the 2010 pop.
+      ##  dens. raster respective to the landcover_ugm for 2015:
+      popmap_15 <- popmap
+      popmap_15[which(values(landcover_ugm_15)==1)] <- popmap_15[which(values(landcover_ugm_15)==1)] * GR_urb[2]
+      popmap_15[which(values(landcover_ugm_15)!=1)] <- popmap_15[which(values(landcover_ugm_15)!=1)] * GR_rur[2]
+      
+      ##  Write that raster to the TMP folder:
+      write.raster(popmap_15, filename = paste0(tmp_path, country, if(un_adj){"_pph_v"}else{"_ppp_v"}, rf_version, "_2015_ugm.tif"),
+                   method = "GTiff", overwrite = TRUE, datatype = "INT2U", 
+                   NAflag = 65535, options = c("COMPRESS=LZW"))
+      
+      
+      ##  Apply urban and rural growth rates for 5 years of change to the previously
+      ##  calculated 2015 estimated population density:
+      popmap_20 <- popmap_15
+      popmap_20[which(values(landcover_ugm_20)==1)] <- popmap_20[which(values(landcover_ugm_20)==1)] * GR_urb[3]
+      popmap_20[which(values(landcover_ugm_20)!=1)] <- popmap_20[which(values(landcover_ugm_20)!=1)] * GR_rur[3]
+      
+      
+      ##  Write the non-UN adjusted popualtion map:
+      writeRaster(popmap_20, filename = paste0(outpath, country, if(prj_map){"_pph_v"}else{"_ppp_v"}, rf_version, "_2020.tif"),filename = paste0(outpath, country, if(prj_map){"_pph_v"}else{"_ppp_v"}, rf_version, "_2020_UNadj.tif"),
+                  method = "GTiff", overwrite = TRUE, datatype = "INT2U", 
+                  NAflag = 65535, options = c("COMPRESS=LZW"))
+      
+    } 
+    ##  END:  CREATION OF PREDICTED POPULATION USING THE UGM
+    ######
+  }
+  ##  Or if runing the annual timestep:
+  elif( m == "10g" ){
     
-    ##  Apply urban and rural growth rates for 5 years of change to the previously
-    ##  calculated 2015 estimated population density:
-    popmap_20 <- popmap_15
-    popmap_20[which(values(landcover_ugm_20)==1)] <- popmap_20[which(values(landcover_ugm_20)==1)] * GR_urb[3]
-    popmap_20[which(values(landcover_ugm_20)!=1)] <- popmap_20[which(values(landcover_ugm_20)!=1)] * GR_rur[3]
+    print("Beginning UGM Population prediction: Annual (10) Timesteps")
+    ##  NOTE: The probability raster output from 1.3.Opt1, i.e. prob, is utilized 
+    ##  here under the same variable name. Therefore, 1.3.Opt.1 MUST BE RUN prior 
+    ##  while still in the same R session:
     
-    
-    ##  Write the non-UN adjusted popualtion map:
-    writeRaster(popmap_20, filename = paste0(outpath, country, if(prj_map){"_pph_v"}else{"_ppp_v"}, rf_version, "_2020.tif"),filename = paste0(outpath, country, if(prj_map){"_pph_v"}else{"_ppp_v"}, rf_version, "_2020_UNadj.tif"),
-                method = "GTiff", overwrite = TRUE, datatype = "INT2U", 
-                NAflag = 65535, options = c("COMPRESS=LZW"))
-    
-  } 
-  ##  END:  CREATION OF PREDICTED POPULATION USING THE UGM
-  ######
-} else{
-  print("Use UGM option is currently OFF. Are you sure you are wanting to run
-          1.4.Opt.1? If so, adjust the option in 1.0 - Configuration.py.r")
+    ##  For each population map:
+    for(pmap in dataset_paths){
+      ##  Bring in the population map:
+      popmap <- brick(pmap)
+      
+      ##  Load the corresponding UGM land cover raster (or the urban land cover raster)
+      ##  as well:
+      ####TODO:  Explicitly define LC2 since I will not be running 1.4 fully prior to this
+      landcover_ugm <- LC2
+      
+      ##  Get the total URBAN population of the 2010 raster (e.g. the sum of pop 
+      ##  where the landcover is urban/built):
+      pop2010 <- sum(popmap[which( values(landcover_ugm) == 1 )])
+      
+      ##  Calculate the estimated 2020 URBAN population:
+      pop_2020 <- pop2010 * (exp( (GR_urb[2]/100) )) * (exp( (GR_urb[3]/100) ))
+      
+      ##  Get the average URBAN population density for 2010 from the pop. den. raster where 
+      ##    it is spatially coincident with land cover matching urban:
+      urb_dens_10 <- mean(pop2010[which( values(landcover_ugm) == 1 )])
+      
+      ##  Use that average urban pop. dens. for 2010 and the total pop for 2010 to
+      ##  calculate the population density threshold to be used in determining new 
+      ##  urban growth from 2010 to 2015:
+      ##  Calculate the urban pop. dens. in 2020:
+      urb_dens_20 <- urb_dens_10 - (urb_dens_10 * densdr * n_years)
+      
+      ##  Calculate the estimated urban pop.area in 2020 (i.e. # of pixels):
+      urb_pop_20 <- pop_2020/urb_dens_20
+      
+      ##  Calculate the area (i.e. number of pixels) that will have new urban 
+      ##  growth:
+      urb_grow_area <- urb_pop_20 - length( which( values( landcover_ugm ) == 1 ) )
+      
+      ##  Give the treshold value of probability where cells are converted to 
+      ##  urban:
+      threshold.value <- sort(prob[], TRUE)[urb_grow_area + 1]
+      
+      ##  NOTE: We are assuming that half of the predicted growth occurs between 
+      ##        2010 to 2015 and the 2nd half of the predicted growth occurs 
+      ##        between 2015 and 2020. Therefore we are taking half the cells with 
+      ##        the highest probability and converting them before applying pop 
+      ##        growth rates and then doing the same for the second half to arrive 
+      ##        at 2020 predictions.
+      
+      ##  Select all cells that are above that threshold:
+      ##  NOTE:  This will be our 2020 landcover.
+      new_growth10_20 <- which( values( prob ) > threshold.value )
+      landcover_ugm_20 <- landcover_ugm
+      landcover_ugm_20[new_growth10_20] <- 1
+      
+      ##  Create the landcover containing the urban growth "seen" between 2010 and
+      ##  2015:
+      ##  Select the median value of all the probabilities above the threshold:
+      med_thresh <- median(values(prob) > threshold.value)
+      new_growth10_15 <- which(values(prob) > med_thresh) 
+      landcover_ugm_15 <- landcover_ugm
+      landcover_ugm_15[new_growth10_15] <- 1
+      
+      
+      ##  Write the 2015 and 2020 landcovers with the urban extents to the output 
+      ##  folder: 
+      writeRaster(landcover_ugm_15, 
+                  filename = paste0(tmp_path, country,"_lc_2015", if(prj_map){"_prj"},".tif"),
+                  method = "GTiff", overwrite = TRUE, datatype = "INT2U", 
+                  NAflag = 65535, options = c("COMPRESS=LZW"))
+      
+      writeRaster(landcover_ugm_20, 
+                  filename = paste0(tmp_path, country,"_lc_2020", if(prj_map){"_prj"},".tif"),
+                  method = "GTiff", overwrite = TRUE, datatype = "INT2U", 
+                  NAflag = 65535, options = c("COMPRESS=LZW"))
+      
+      ##  Apply urban and rural growth rates for 5 years of change to the 2010 pop.
+      ##  dens. raster respective to the landcover_ugm for 2015:
+      popmap_15 <- popmap
+      popmap_15[which(values(landcover_ugm_15)==1)] <- popmap_15[which(values(landcover_ugm_15)==1)] * GR_urb[2]
+      popmap_15[which(values(landcover_ugm_15)!=1)] <- popmap_15[which(values(landcover_ugm_15)!=1)] * GR_rur[2]
+      
+      ##  Write that raster to the TMP folder:
+      write.raster(popmap_15, filename = paste0(tmp_path, country, if(un_adj){"_pph_v"}else{"_ppp_v"}, rf_version, "_2015_ugm.tif"),
+                   method = "GTiff", overwrite = TRUE, datatype = "INT2U", 
+                   NAflag = 65535, options = c("COMPRESS=LZW"))
+      
+      
+      ##  Apply urban and rural growth rates for 5 years of change to the previously
+      ##  calculated 2015 estimated population density:
+      popmap_20 <- popmap_15
+      popmap_20[which(values(landcover_ugm_20)==1)] <- popmap_20[which(values(landcover_ugm_20)==1)] * GR_urb[3]
+      popmap_20[which(values(landcover_ugm_20)!=1)] <- popmap_20[which(values(landcover_ugm_20)!=1)] * GR_rur[3]
+      
+      
+      ##  Write the non-UN adjusted popualtion map:
+      writeRaster(popmap_20, filename = paste0(outpath, country, if(prj_map){"_pph_v"}else{"_ppp_v"}, rf_version, "_2020.tif"),filename = paste0(outpath, country, if(prj_map){"_pph_v"}else{"_ppp_v"}, rf_version, "_2020_UNadj.tif"),
+                  method = "GTiff", overwrite = TRUE, datatype = "INT2U", 
+                  NAflag = 65535, options = c("COMPRESS=LZW"))
+      
+    } 
+    ##  END:  CREATION OF PREDICTED POPULATION USING THE UGM
+    ######
+    end <- proc.time()
+    ela <- end-start
+    print(paste0("Finished creating maps for ", m, "model!"))
+    print(paste0("Time Elapsed: ",ela[3]))
+  }
+  
 }
 
 ##  End the cluster:
